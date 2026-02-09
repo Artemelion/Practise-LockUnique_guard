@@ -7,78 +7,99 @@
 
 using namespace std;
 
-mutex mtx;
-condition_variable cv;
-
-bool ready = false;
-string fileText;
-
-void waitingthread()
+class FileSync
 {
-    string localCopy;
+    mutex fileMutex;
+    condition_variable fileReadyCondition;
 
+    bool ready;
+    string filename;
+
+public:
+    FileSync(const string& filename)
     {
-        unique_lock<mutex> lock(mtx);
+        this->filename = filename;
+        ready = false;
+    }
 
-        cout << "ожидающий поток: жду чтение файла..." << endl;
+    void waitingThread()
+    {
+        unique_lock<mutex> lock(fileMutex);
+
+        cout << "WAIT" << endl;
 
         while (!ready)
         {
-            cv.wait(lock);
+            fileReadyCondition.wait(lock);
         }
-        localCopy = fileText;
+
+        cout << "READ" << endl;
+
+        ifstream in(filename);
+        if (!in.is_open())
+        {
+            cout << "NOFILE" << endl;
+            return;
+        }
+
+        string line;
+        while (getline(in, line))
+        {
+            cout << line << endl;
+        }
+
+        in.close();
     }
 
-    cout << "ожидающий поток: файл прочитан, печатаю:" << endl;
-    cout << localCopy << endl;
-}
-
-void signalingthread()
-{
-    this_thread::sleep_for(chrono::seconds(1));
-
-    string local;
-    ifstream in("input.txt");
-
-    if (!in.is_open())
+    void signalingThread()
     {
+        this_thread::sleep_for(chrono::seconds(1));
+
         {
-            lock_guard<mutex> Lockguard(mtx);
-            fileText = "no file\n";
+            lock_guard<mutex> guard(fileMutex);
+
+            ofstream out(filename);
+            if (!out.is_open())
+            {
+                ready = true;
+                fileReadyCondition.notify_one();
+                return;
+            }
+
+            cout << "WRITE" << endl;
+
+            for (int i = 1; i <= 5; i++)
+            {
+                out << "Line " << i << "\n";
+            }
+
+            out.close();
             ready = true;
         }
-        cv.notify_one();
-        return;
-    }
 
-    string line;
-    while (getline(in, line))
-    {
-        local += line;
-        local += '\n';
+        fileReadyCondition.notify_one();
     }
-    in.close();
-
-    {
-        lock_guard<mutex> Lockguard(mtx);
-        fileText = local;
-        ready = true;
-        cout << "сигналящий поток: ready = true (ФАЙЛ ПРОЧИТАН)" << endl;
-    }
-
-    cv.notify_one();
-}
+};
 
 int main()
 {
     setlocale(0, "ru");
 
-    thread t1(waitingthread);
-    thread t2(signalingthread);
+    FileSync fileSync("input.txt");
 
-    t1.join();
-    t2.join();
+    thread writer([&fileSync]()
+        {
+            fileSync.signalingThread();
+        });
 
-    cout << "готово." << endl;
+    thread reader([&fileSync]()
+        {
+            fileSync.waitingThread();
+        });
+
+    writer.join();
+    reader.join();
+
+    cout << "DONE" << endl;
     return 0;
 }
